@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <title>WA Gateway - CV TSD</title>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/x-icon" href="/logowhite.ico">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+  <style>
+    :root {
+      --wa-green: #00a884;
+      --wa-dark: #008069;
+      --bg-light: #f0f2f5;
+    }
+    
+    body {
+      font-family: 'Inter', sans-serif;
+      background-color: var(--bg-light);
+      color: #3b3e49;
+      height: 100vh;
+      overflow: hidden;
+    }
+    
+    /* Layout Structure */
+    .app-container {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    
+    .header {
+      background: linear-gradient(135deg, var(--wa-dark), var(--wa-green));
+      padding: 20px 40px;
+      color: white;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    }
+    
+    .main-content {
+      flex: 1;
+      padding: 25px 40px;
+      overflow-y: auto;
+    }
+    
+    /* Card Styles */
+    .glass-card {
+      background: white;
+      border-radius: 12px;
+      border: none;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.05);
+      margin-bottom: 20px;
+    }
+    
+    /* QR Code Area */
+    #qrcode {
+      max-width: 250px;
+      width: 100%;
+      margin: 20px auto;
+      border: 10px solid #fff;
+      box-shadow: 0 0 15px rgba(0,0,0,0.1);
+      border-radius: 8px;
+    }
+    
+    /* Chat List Area */
+    #chat-list {
+      max-height: 550px;
+      overflow-y: auto;
+      border-radius: 8px;
+      background: #fff;
+    }
+    
+    .chat-item {
+      display: flex;
+      align-items: center;
+      padding: 12px 15px;
+      border-bottom: 1px solid #f0f2f5;
+      transition: all 0.2s;
+      cursor: pointer;
+    }
+    
+    .chat-item:hover { background-color: #f8f9fa; }
+    .chat-item.active { background-color: #e9f5f2; border-left: 4px solid var(--wa-green); }
+    
+    .profile-pic {
+      width: 50px; height: 50px;
+      border-radius: 50%;
+      margin-right: 15px;
+      background: #eee;
+      object-fit: cover;
+    }
+    
+    .chat-details { flex: 1; min-width: 0; }
+    .chat-top { display: flex; justify-content: space-between; align-items: center; }
+    .chat-name { font-weight: 600; font-size: 15px; color: #111b21; }
+    .chat-time { font-size: 12px; color: #667781; }
+    .chat-msg { font-size: 13px; color: #667781; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    
+    .unread-badge {
+      background: var(--wa-green);
+      color: white;
+      font-size: 11px;
+      padding: 2px 7px;
+      border-radius: 10px;
+      font-weight: bold;
+    }
+    
+    /* Log Panel */
+    .log-panel {
+      background: #1e1e1e;
+      color: #00ff00;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      padding: 15px;
+      border-radius: 8px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+    
+    /* Animations */
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid var(--wa-green);
+      border-radius: 50%;
+      width: 40px; height: 40px;
+      animation: spin 1s linear infinite;
+      margin: 20px auto;
+    }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    
+    @media (max-width: 768px) {
+      .header, .main-content { padding: 15px; }
+      .main-content { overflow-y: visible; }
+    }
+  </style>
+</head>
+<body>
+  
+  <div class="app-container">
+    <header class="header d-flex justify-content-between align-items-center">
+      <div>
+        <h4 class="m-0 font-weight-bold" id="client-title">WhatsApp Gateway</h4>
+        <small class="opacity-75">CV Tekno Solusi Digital</small>
+      </div>
+      <div class="btn-group">
+        <button onclick="logoutSession()" class="btn btn-light btn-sm font-weight-bold text-danger mr-2">
+          <i class="fas fa-sign-out-alt"></i> Keluar Akun
+        </button>
+        <a href="/logout" class="btn btn-outline-light btn-sm">
+          <i class="fas fa-power-off"></i> Logout Sistem
+        </a>
+      </div>
+    </header>
+    
+    <main class="main-content">
+      <div class="row">
+        <div class="col-lg-8">
+          <div id="instruction-area" class="glass-card p-4 text-center">
+            <h5 class="font-weight-bold mb-3">Hubungkan Perangkat</h5>
+            <p class="text-muted">Gunakan WhatsApp di ponsel Anda untuk memindai kode QR di sebelah kanan.</p>
+            <div class="text-left d-inline-block">
+              <small class="d-block mb-1"><i class="fas fa-check-circle text-success"></i> Buka WhatsApp di HP</small>
+              <small class="d-block mb-1"><i class="fas fa-check-circle text-success"></i> Menu > Perangkat Tertaut</small>
+              <small class="d-block"><i class="fas fa-check-circle text-success"></i> Klik Tautkan Perangkat</small>
+            </div>
+          </div>
+          
+          <div id="chat-list-area" class="glass-card" style="display:none;">
+            <div class="p-3 border-bottom d-flex justify-content-between align-items-center bg-light">
+              <h6 class="m-0 font-weight-bold"><i class="fab fa-whatsapp"></i> Chat Terbaru</h6>
+              <button id="btn-fetch-chats" class="btn btn-wa-green btn-sm text-white" style="background-color: var(--wa-green);">
+                <i class="fas fa-sync-alt"></i> Refresh Chat
+              </button>
+            </div>
+            <div id="chat-loader" style="display:none;" class="text-center p-5">
+              <div class="loader"></div>
+              <p class="small text-muted">Mengambil data dari WhatsApp...</p>
+            </div>
+            <ul id="chat-list" class="list-group list-group-flush">
+            </ul>
+          </div>
+        </div>
+        
+        <div class="col-lg-4">
+          <div class="glass-card p-4 text-center mb-4">
+            <h6 class="font-weight-bold mb-3">Status Koneksi</h6>
+            
+            <div id="loaderqr" class="loader"></div>
+            
+            <div id="authenticated" style="display:none;" class="mb-3">
+              <div class="alert alert-success py-2">
+                <i class="fas fa-check-circle"></i> <strong>Terhubung</strong>
+              </div>
+            </div>
+            
+            <img src="" alt="QR Code" id="qrcode" class="img-fluid" style="display:none;">
+            
+            <div class="mt-4 text-left">
+              <label class="small font-weight-bold text-muted"><i class="fas fa-terminal"></i> Log Aktivitas:</label>
+              <div class="log-panel" id="log-container">
+                <ul class="logs list-unstyled m-0"></ul>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </main>
+  </div>
+  
+  <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.3.0/socket.io.js"></script>
+  
+  <script>
+    const pathParts = window.location.pathname.split('/');
+    const clientId = pathParts[pathParts.length - 1];
+    
+    // Update Title UI
+    $('#client-title').text('Gateway: ' + clientId.toUpperCase());
+    
+    const socket = io({ reconnection: true, reconnectionAttempts: 10 });
+    
+    $(document).ready(function() {
+      socket.emit('join_room', clientId);
+      
+      // Fetch Chat Manual
+      $('#btn-fetch-chats').on('click', fetchAndRenderChats);
+      
+      // Socket Events
+      socket.on('qr', function(src) {
+        $('#qrcode').attr('src', src).show();
+        $('#loaderqr, #authenticated').hide();
+        $('#instruction-area').show();
+        $('#chat-list-area').hide();
+      });
+      
+      socket.on('ready', function() {
+        showReadyState();
+        addLog('WhatsApp Siap digunakan.');
+      });
+      
+      socket.on('authenticated', function() {
+        showReadyState();
+        addLog('Autentikasi Berhasil.');
+      });
+      
+      socket.on('message', function(msg) {
+        addLog(msg);
+      });
+    });
+    
+    function showReadyState() {
+      $('#loaderqr, #qrcode, #instruction-area').hide();
+      $('#authenticated, #chat-list-area').show();
+    }
+    
+    function addLog(msg) {
+      $('.logs').append($('<li>').addClass('mb-1').text('> ' + msg));
+        const container = document.getElementById('log-container');
+        container.scrollTop = container.scrollHeight;
+      }
+      
+      async function fetchAndRenderChats() {
+        const chatListEl = $('#chat-list');
+        const chatLoaderEl = $('#chat-loader');
+        
+        chatLoaderEl.show();
+        chatListEl.empty();
+        
+        try {
+          const response = await fetch(`/api/chats/${clientId}`, {
+            method: 'GET',
+            headers: {
+              'Accept': 'application/json'
+            }
+          });
+          const result = await response.json();
+          
+          chatLoaderEl.hide();
+          if (result.status) {
+            result.data.forEach(chat => {
+              const time = chat.timestamp ? new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+              const html = `
+                        <li class="chat-item">
+                            <img src="${chat.profilePic || 'https://via.placeholder.com/50'}" class="profile-pic">
+                            <div class="chat-details">
+                                <div class="chat-top">
+                                    <span class="chat-name">${chat.name}</span>
+                                    <span class="chat-time">${time}</span>
+                                </div>
+                                <div class="chat-msg">${chat.lastMessage || 'Tidak ada pesan'}</div>
+                            </div>
+                            ${chat.unreadCount > 0 ? `<span class="unread-badge ml-2">${chat.unreadCount}</span>` : ''}
+                        </li>`;
+              chatListEl.append(html);
+            });
+          }
+        } catch (e) {
+          chatLoaderEl.hide();
+          addLog('Error: Gagal memuat chat.');
+        }
+      }
+      
+      async function logoutSession() {
+        if (confirm('Putuskan koneksi WhatsApp dan hapus sesi ini?')) {
+          try {
+            const response = await fetch(`/api/logout-wa/${clientId}`);
+            const result = await response.json();
+            if (result.status) {
+              alert('Berhasil Logout. Anda akan dialihkan ke halaman login.');
+              window.location.href = '/logout'; // Logout dari sistem juga
+            }
+          } catch (e) {
+            alert('Gagal logout: ' + e.message);
+          }
+        }
+      }
+    </script>
+  </body>
+  </html>
