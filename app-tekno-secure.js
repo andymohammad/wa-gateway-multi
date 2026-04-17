@@ -1,5 +1,6 @@
 const { Client, LocalAuth, MessageMedia } = require('whatsapp-web.js');
 const express = require('express');
+const fs = require('fs');
 const session = require('express-session');
 const cookieParser = require('cookie-parser');
 const { body, validationResult } = require('express-validator');
@@ -56,14 +57,19 @@ const initializeWhatsApp = async (clientId) => {
     const client = new Client({
         restartOnAuthFail: false,
         puppeteer: { 
-            headless: true, 
+            headless: 'new', 
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
                 '--disable-dev-shm-usage', 
+                '--disable-accelerated-2d-canvas',
+                '--no-first-run',
                 '--disable-gpu',
                 '--no-zygote',
-                '--single-process' // Membantu menghemat RAM pada multi-akun
+                // '--single-process', // Membantu menghemat RAM pada multi-akun
+                '--proxy-server="direct://"',
+                '--proxy-bypass-list=*',
+                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
             ]
         },
         authStrategy: new LocalAuth({ 
@@ -95,6 +101,22 @@ const initializeWhatsApp = async (clientId) => {
         io.to(clientId).emit('message', `[${clientId}] Terhubung.`);
     });
     
+    client.on('message', async (msg) => {
+        // Kirim data pesan baru ke frontend agar daftar chat bisa update otomatis
+        const chat = await msg.getChat();
+        const contact = await msg.getContact();
+        const profilePic = await contact.getProfilePicUrl().catch(() => '');
+        
+        io.to(clientId).emit('new_message', {
+            from: msg.from,
+            body: msg.body,
+            name: chat.name,
+            timestamp: msg.timestamp,
+            profilePic: profilePic,
+            unreadCount: chat.unreadCount
+        });
+    });
+    
     client.on('authenticated', () => {
         clientStates[clientId] = { status: 'authenticated', data: null };
         io.to(clientId).emit('authenticated');
@@ -118,7 +140,7 @@ const initializeWhatsApp = async (clientId) => {
         
         delete clients[clientId];
         if (reason === 'LOGOUT') {
-            const fs = require('fs');
+            // const fs = require('fs');
             const sessionPath = `./sessions/session-${clientId}`; // Sesuaikan dengan struktur LocalAuth
             if (fs.existsSync(sessionPath)) {
                 fs.rmSync(sessionPath, { recursive: true, force: true });
@@ -166,17 +188,17 @@ io.on('connection', (socket) => {
 const isAuthorized = (req, res, next) => {
     const { clientId } = req.params;
     const apiKey = req.headers['x-api-key'];
-
+    
     if (!CLIENT_CONFIG[clientId]) {
         return res.status(404).json({ status: false, message: 'Klien tidak ditemukan.' });
     }
-
+    
     // 1. Cek Sesi (Prioritas untuk akses via Browser/client.html)
     if (req.session && req.session.isAuthenticated && req.session.clientId === clientId) {
         req.client = clients[clientId];
         return next();
     }
-
+    
     // 2. Cek API Key (Untuk akses via API eksternal)
     if (req.path.startsWith('/api/')) {
         if (apiKey && apiKey === CLIENT_CONFIG[clientId].apiKey) {
@@ -185,7 +207,7 @@ const isAuthorized = (req, res, next) => {
         }
         return res.status(401).json({ status: false, message: 'Unauthorized: Sesi tidak valid atau API Key tidak ada.' });
     }
-
+    
     return res.redirect('/');
 };
 
@@ -303,6 +325,10 @@ app.get('/api/check-status/:clientId', isAuthorized, async (req, res) => {
 // Endpoint untuk mendapatkan daftar seluruh chat
 app.get('/api/chats/:clientId', isAuthorized, async (req, res) => {
     try {
+        // Tambahkan pengecekan tambahan pada objek internal
+        if (!req.client || !req.client.pupPage || req.client.pupPage.isClosed()) {
+            throw new Error('Browser belum siap atau halaman tertutup.');
+        }
         const chats = await req.client.getChats();
         const sortedChats = chats
         .filter(chat => chat.timestamp || (chat.lastMessage && chat.lastMessage.timestamp))
@@ -316,16 +342,26 @@ app.get('/api/chats/:clientId', isAuthorized, async (req, res) => {
         const chatList = await Promise.all(sortedChats.map(async (chat) => {
             const lastMsg = chat.lastMessage;
             let profilePic = null;
-            
+            let contact = null;
             try {
+                contact = await chat.getContact();
                 profilePic = await req.client.getProfilePicUrl(chat.id._serialized);
             } catch (e) {
                 profilePic = null; // Abaikan jika foto profil tidak bisa diambil
             }
+            // LOGIKA RESOLUSI ID:
+            // Jika ID menggunakan @lid dan bukan grup, ubah menjadi @c.us menggunakan nomor asli
+            let resolvedId = chat.id._serialized;
+            if (!chat.isGroup && resolvedId.endsWith('@lid')) {
+                if (contact && contact.number) {
+                    resolvedId = contact.number + '@c.us';
+                }
+            }
             
             return {
-                id: chat.id._serialized,
-                name: chat.name || chat.formattedTitle || chat.id.user,
+                id: resolvedId,
+                // name: chat.name || chat.formattedTitle || formattedNumber,
+                name: chat.name || contact?.pushname || contact?.name || chat.id.user,
                 isGroup: chat.isGroup,
                 unreadCount: chat.unreadCount,
                 timestamp: chat.timestamp || (lastMsg ? lastMsg.timestamp : null),
@@ -403,7 +439,29 @@ app.post('/api/messages/:clientId', isAuthorized, [ body('number').notEmpty() ],
         res.status(500).json({ status: false, message: 'Gagal mengambil pesan', error: error.message });
     }
 });
+// Fungsi pembantu untuk membuat delay
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+const autoInitialize = async () => {
+    console.log("Memulai pemeriksaan sesi dengan sistem antrean...");
+    
+    for (const id of CLIENT_IDS) {
+        const sessionPath = path.join(__dirname, 'sessions', `session-${id}`);
+        
+        if (fs.existsSync(sessionPath)) {
+            console.log(`[${id}] Sesi ditemukan. Mengantre inisialisasi...`);
+            
+            // Tunggu 10 detik sebelum menjalankan akun berikutnya
+            await initializeWhatsApp(id);
+            await delay(90000); 
+        } else {
+            console.log(`[${id}] Belum ada sesi, dilewati.`);
+        }
+    }
+};
+
+// Panggil fungsi ini di bagian bawah sebelum server.listen
+autoInitialize();
 server.listen(port, () => {
     console.log(`Server WhatsApp Gateway Dinamis (AMAN) berjalan di http://localhost:${port}`);
     if (CLIENT_IDS.length === 0) console.warn("PERINGATAN: Tidak ada klien yang dikonfigurasi.");

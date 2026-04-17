@@ -1,6 +1,6 @@
 {
   "name": "whatsapp-gateway",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "description": "Whatsapp Gateway berbasis library whatsapp-web.js (wagw) oleh pedroslopez, dikembangkan dan dimodifikasi lebih lanjut oleh Andy.",
   "main": "app-tekno-secure.js",
   "scripts": {

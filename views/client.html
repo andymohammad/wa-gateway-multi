@@ -128,6 +128,24 @@
     }
     @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     
+    .message-wrapper { display: flex; margin-bottom: 10px; flex-direction: column; }
+    .message-wrapper.me { align-items: flex-end; }
+    .message-wrapper.them { align-items: flex-start; }
+    
+    .message-bubble {
+      max-width: 70%;
+      padding: 8px 12px;
+      border-radius: 8px;
+      position: relative;
+      font-size: 14px;
+    }
+    .me .message-bubble { background-color: #dcf8c6; border-top-right-radius: 0; }
+    .them .message-bubble { background-color: #ffffff; border-top-left-radius: 0; box-shadow: 0 1px 1px rgba(0,0,0,0.1); }
+    
+    .message-time { font-size: 10px; color: #888; text-align: right; margin-top: 4px; }
+    .chat-item.active { background-color: #ebebeb; border-left: 4px solid var(--wa-green); }
+    .unread-badge { background: var(--wa-green); color: white; border-radius: 50%; padding: 2px 7px; font-size: 11px; }
+    
     @media (max-width: 768px) {
       .header, .main-content { padding: 15px; }
       .main-content { overflow-y: visible; }
@@ -213,7 +231,7 @@
   <script>
     const pathParts = window.location.pathname.split('/');
     const clientId = pathParts[pathParts.length - 1];
-    
+    let activeChatId = null;
     // Update Title UI
     $('#client-title').text('Gateway: ' + clientId.toUpperCase());
     
@@ -223,7 +241,8 @@
       socket.emit('join_room', clientId);
       
       // Fetch Chat Manual
-      $('#btn-fetch-chats').on('click', fetchAndRenderChats);
+      // $('#btn-fetch-chats').on('click', fetchAndRenderChats);
+      $('#btn-fetch-chats').on('click', loadChats);
       
       // Socket Events
       socket.on('qr', function(src) {
@@ -246,6 +265,46 @@
       socket.on('message', function(msg) {
         addLog(msg);
       });
+      
+      socket.on('new_message', (data) => {
+        // Update daftar chat di sidebar tanpa refresh halaman
+        loadChats(); 
+        
+        // Jika pesan masuk berasal dari chat yang sedang dibuka, muat ulang isi chat
+        if (activeChatId === data.from) {
+          openChat(data.from, data.name);
+        }
+        
+        addLog(`Pesan baru dari ${data.name}: ${data.body}`);
+      });
+      
+      $('#btn-send-message').click(async function() {
+        const messageInput = $('#input-message');
+        const message = messageInput.val();
+        
+        if (!message || !activeChatId) return;
+        
+        try {
+          const response = await fetch(`/api/send-message/${clientId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+              number: activeChatId, 
+              message: message 
+            })
+          });
+          
+          const result = await response.json();
+          if (result.status) {
+            messageInput.val('');
+            // Refresh window chat untuk melihat pesan kita sendiri
+            openChat(activeChatId, $('#active-chat-name').text());
+          }
+        } catch (e) {
+          alert('Gagal mengirim pesan');
+        }
+      });
+      
     });
     
     function showReadyState() {
@@ -312,6 +371,84 @@
           } catch (e) {
             alert('Gagal logout: ' + e.message);
           }
+        }
+      }
+      
+      // 2. Fungsi untuk membuka chat (Menampilkan isi pesan)
+      async function openChat(chatId, chatName) {
+        activeChatId = chatId;
+        
+        // UI Feedback: Tandai chat yang aktif di sidebar
+        $('.chat-item').removeClass('active');
+        $(`li[onclick*="${chatId}"]`).addClass('active');
+        
+        // Tampilkan panel chat dan set nama
+        $('#chat-placeholder').addClass('d-none');
+        $('#chat-window').removeClass('d-none');
+        $('#active-chat-name').text(chatName);
+        
+        const messageContainer = $('#message-container');
+        messageContainer.html('<div class="text-center mt-5"><i class="fas fa-spinner fa-spin"></i> Memuat pesan...</div>');
+        
+        try {
+          const response = await fetch(`/api/messages/${clientId}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ number: chatId })
+          });
+          const result = await response.json();
+          
+          if (result.status) {
+            messageContainer.empty();
+            result.data.forEach(msg => {
+              const isMe = msg.fromMe;
+              const html = `
+                    <div class="message-wrapper ${isMe ? 'me' : 'them'}">
+                        <div class="message-bubble shadow-sm">
+                            <div class="message-text">${msg.body}</div>
+                            <div class="message-time">${new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
+                        </div>
+                    </div>`;
+              messageContainer.append(html);
+            });
+            // Auto scroll ke bawah
+            messageContainer.scrollTop(messageContainer[0].scrollHeight);
+          }
+        } catch (e) {
+          addLog('Error: Gagal memuat pesan.');
+        }
+      }
+      
+      // 3. Modifikasi fungsi loadChats agar elemen bisa diklik
+      async function loadChats() {
+        const chatListEl = $('#chat-list');
+        try {
+          const response = await fetch(`/api/chats/${clientId}`); // Sesuaikan endpoint dengan app-tekno-secure.js
+          const result = await response.json();
+          
+          if (result.status) {
+            chatListEl.empty();
+            result.data.forEach(chat => {
+              const time = chat.timestamp ? new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
+              const activeClass = activeChatId === chat.id ? 'active' : '';
+              
+              const html = `
+                    <li class="chat-item ${activeClass}" onclick="openChat('${chat.id}', '${chat.name.replace(/'/g, "\\'")}')">
+                        <img src="${chat.profilePic || 'https://via.placeholder.com/50'}" class="profile-pic">
+                        <div class="chat-details">
+                            <div class="chat-top">
+                                <span class="chat-name">${chat.name}</span>
+                                <span class="chat-time">${time}</span>
+                            </div>
+                            <div class="chat-msg text-truncate">${chat.lastMessage || '<i>Tidak ada pesan</i>'}</div>
+                        </div>
+                        ${chat.unreadCount > 0 ? `<span class="unread-badge">${chat.unreadCount}</span>` : ''}
+                    </li>`;
+              chatListEl.append(html);
+            });
+          }
+        } catch (e) {
+          addLog('Error: Gagal memuat daftar chat.');
         }
       }
     </script>
