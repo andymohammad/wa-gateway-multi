@@ -28,7 +28,11 @@ CLIENT_IDS.forEach(id => {
 const clientStates = {};
 const clientInits = {};
 const clients = {}; // Objek untuk menyimpan semua instance klien
-
+const qrCache = {}; // Cache untuk menyimpan QR code terakhir dan debounce
+const QR_DEBOUNCE_TIME = 2000; // Debounce 2 detik untuk QR events
+const qrCounts = {}; // Hitungan jumlah QR yang sudah digenerate per klien
+const QR_LIMIT = 20; // Batas maksimal generate QR sebelum diblokir
+const wwebjsVersion = require('whatsapp-web.js/package.json').version;
 // --- Middleware & Setup ---
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -44,6 +48,11 @@ app.use(session({
 }));
 
 const initializeWhatsApp = async (clientId) => {
+    // Jika klien sudah diblokir karena terlalu banyak QR, jangan inisialisasi ulang sampai regenerate.
+    if (clientStates[clientId] && clientStates[clientId].status === 'qr_blocked') {
+        console.log(`[${clientId}] Inisialisasi dibatalkan karena status qr_blocked.`);
+        return;
+    }
     // 1. Cek apakah sudah ada instance yang sedang berjalan atau aktif
     if (clients[clientId] || clientInits[clientId]) {
         console.log(`[${clientId}] Inisialisasi sudah berjalan atau client aktif.`);
@@ -51,13 +60,15 @@ const initializeWhatsApp = async (clientId) => {
     }
     clientInits[clientId] = true; // Tandai sedang proses inisialisasi
     console.log(`Menginisialisasi WhatsApp untuk ${clientId}...`);
+    // Reset counter QR untuk klien ini saat mulai inisialisasi
+    qrCounts[clientId] = qrCounts[clientId] || 0;
     // clientStates[clientId] = { status: 'loading', data: null };
     io.to(clientId).emit('loading_screen'); // Kirim status loading ke frontend
     
     const client = new Client({
         restartOnAuthFail: false,
         puppeteer: { 
-            headless: 'new', 
+            headless: true, 
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox', 
@@ -66,10 +77,21 @@ const initializeWhatsApp = async (clientId) => {
                 '--no-first-run',
                 '--disable-gpu',
                 '--no-zygote',
-                // '--single-process', // Membantu menghemat RAM pada multi-akun
+                '--single-process',
                 '--proxy-server="direct://"',
                 '--proxy-bypass-list=*',
-                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+                '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            
+            	'--disable-extensions',       // Mencegah load ekstensi default
+    '--disable-default-apps',
+    '--mute-audio',               // Mematikan engine audio
+    '--no-default-browser-check',
+    '--autoplay-policy=user-gesture-required',
+    '--disable-background-timer-throttling',
+    '--disable-backgrounding-occluded-windows',
+    '--disable-renderer-backgrounding',
+    // Opsi untuk mencegah cache disk membengkak:
+    '--disk-cache-size=0',
             ]
         },
         authStrategy: new LocalAuth({ 
@@ -84,19 +106,82 @@ const initializeWhatsApp = async (clientId) => {
     
     clients[clientId] = client;
     
-    client.on('qr', async (qr) => {
+    const handleQrEvent = async (qr) => {
         clientInits[clientId] = false;
-        console.log(`[${clientId}] QR Code diterima.`);
-        const qrImage = await qrcode.toDataURL(qr);
-        clientStates[clientId] = { status: 'qr', data: qrImage };
-        io.to(clientId).emit('qr', qrImage);
-        io.to(clientId).emit('message', 'Silakan pindai QR Code.');
-    });
+        
+        // Jika sudah dalam status blokir, abaikan QR event selanjutnya.
+        if (clientStates[clientId] && clientStates[clientId].status === 'qr_blocked') {
+            return;
+        }
+        
+        // Cek apakah QR code sudah ada di cache atau masih dalam debounce time
+        const now = Date.now();
+        if (qrCache[clientId]) {
+            const { qrString, timestamp, imageUrl } = qrCache[clientId];
+            
+            // Jika QR string sama dan belum melewati debounce time, skip
+            if (qrString === qr && (now - timestamp) < QR_DEBOUNCE_TIME) {
+                return;
+            }
+            
+            // Cleanup QR lama dari memory jika ada
+            if (imageUrl) {
+                qrCache[clientId].imageUrl = null;
+            }
+        }
+        
+        try {
+            // Hitung berapa kali QR sudah digenerate (hanya saat kita akan mengemit ke UI)
+            qrCounts[clientId] = (qrCounts[clientId] || 0) + 1;
+            // Jika sudah melewati batas, jangan generate lagi dan beri tahu frontend
+            if (qrCounts[clientId] > QR_LIMIT) {
+                clientStates[clientId] = { status: 'qr_blocked', data: null, count: qrCounts[clientId] };
+                io.to(clientId).emit('qr_limit_reached', { count: qrCounts[clientId], limit: QR_LIMIT });
+                io.to(clientId).emit('message', `QR generation diblokir setelah ${QR_LIMIT} percobaan. Tekan regenerate untuk mencoba lagi.`);
+                console.log(`[${clientId}] QR generation diblokir setelah ${qrCounts[clientId]} percobaan.`);
+                clientInits[clientId] = false;
+                try {
+                    await client.destroy();
+                } catch (e) {
+                    console.warn(`[${clientId}] Gagal menghentikan client setelah block:`, e.message);
+                }
+                delete clients[clientId];
+                return;
+            }
+
+            console.log(`[${clientId}] QR Code diterima.`);
+            const qrImage = await qrcode.toDataURL(qr);
+            clientStates[clientId] = { status: 'qr', data: qrImage, count: qrCounts[clientId] };
+            
+            // Cache QR code baru
+            qrCache[clientId] = {
+                qrString: qr,
+                timestamp: now,
+                imageUrl: qrImage
+            };
+            
+            io.to(clientId).emit('qr', qrImage);
+            io.to(clientId).emit('message', 'Silakan pindai QR Code.');
+        } catch (err) {
+            console.error(`[${clientId}] Error generating QR code:`, err);
+        }
+    };
+
+    client.on('qr', handleQrEvent);
     
     client.on('ready', () => {
         console.log(`[${clientId}] SIAP!`);
         clientInits[clientId] = false;
         clientStates[clientId] = { status: 'ready', data: null };
+        
+        // Cleanup QR cache saat login berhasil
+        if (qrCache[clientId]) {
+            qrCache[clientId].imageUrl = null;
+            delete qrCache[clientId];
+        }
+        // Reset counter QR
+        if (qrCounts[clientId]) delete qrCounts[clientId];
+        
         io.to(clientId).emit('ready');
         io.to(clientId).emit('message', `[${clientId}] Terhubung.`);
     });
@@ -132,6 +217,15 @@ const initializeWhatsApp = async (clientId) => {
         io.to(clientId).emit('message', `[${clientId}] terputus, ${reason}.`);
         clientStates[clientId] = { status: 'disconnected', data: null };
         clientInits[clientId] = false;
+        
+        // Cleanup QR cache
+        if (qrCache[clientId]) {
+            qrCache[clientId].imageUrl = null;
+            delete qrCache[clientId];
+        }
+        // Cleanup QR counter
+        if (qrCounts[clientId]) delete qrCounts[clientId];
+        
         io.to(clientId).emit('message', `[${clientId}] Terputus. Halaman akan memuat ulang dalam 5 detik.`);
         
         try {
@@ -170,16 +264,51 @@ io.on('connection', (socket) => {
             socket.emit('message', `Anda terhubung ke monitoring ${clientId}.`);
             
             if (!clients[clientId] && !clientInits[clientId]) {
-                initializeWhatsApp(clientId);
+                if (clientStates[clientId] && clientStates[clientId].status === 'qr_blocked') {
+                    socket.emit('qr_limit_reached', { count: clientStates[clientId].count || 0, limit: QR_LIMIT });
+                } else {
+                    initializeWhatsApp(clientId);
+                }
             } else {
                 const currentState = clientStates[clientId];
                 if (currentState) {
                     // Kirim status terakhir agar UI sinkron tanpa refresh
                     if (currentState.status === 'qr') socket.emit('qr', currentState.data);
+                    if (currentState.status === 'qr_blocked') socket.emit('qr_limit_reached', { count: currentState.count || 0, limit: QR_LIMIT });
                     if (currentState.status === 'ready') socket.emit('ready');
                 }
             }
         }
+    });
+
+    // Event dari frontend untuk meregenerasi QR secara manual (setelah dibatasi)
+    socket.on('regenerate_qr', async (clientId) => {
+        if (!CLIENT_IDS.includes(clientId)) return socket.emit('message', 'Klien tidak ditemukan.');
+
+        // Reset counter, state, dan cache agar inisialisasi bisa dijalankan ulang
+        qrCounts[clientId] = 0;
+        clientStates[clientId] = { status: 'loading', data: null };
+        if (qrCache[clientId]) {
+            qrCache[clientId].imageUrl = null;
+            delete qrCache[clientId];
+        }
+
+        socket.emit('message', `Regenerating QR untuk ${clientId}...`);
+
+        try {
+            if (clients[clientId]) {
+                try { await clients[clientId].destroy(); } catch (e) {}
+                delete clients[clientId];
+            }
+            // Re-inisialisasi client untuk memaksa generate QR baru
+            initializeWhatsApp(clientId);
+        } catch (e) {
+            socket.emit('message', `Gagal meregenerasi QR: ${e.message}`);
+        }
+    });
+
+    socket.emit('app_info', {
+        wwebjsVersion: wwebjsVersion
     });
 });
 
@@ -248,6 +377,15 @@ app.get('/api/logout-wa/:clientId', isAuthorized, async (req, res) => {
             delete clients[clientId];
             delete clientStates[clientId];
         }
+        
+        // Cleanup QR cache
+        if (qrCache[clientId]) {
+            qrCache[clientId].imageUrl = null;
+            delete qrCache[clientId];
+        }
+        // Cleanup QR counter
+        if (qrCounts[clientId]) delete qrCounts[clientId];
+        
         res.json({ status: true, message: 'WhatsApp Logout Berhasil.' });
     } catch (e) { res.status(500).json({ status: false, message: e.message }); }
 });

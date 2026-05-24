@@ -1,456 +1,745 @@
 <!DOCTYPE html>
 <html lang="id">
+
 <head>
   <title>WA Gateway - CV TSD</title>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <link rel="icon" type="image/x-icon" href="/logowhite.ico">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@4.6.2/dist/css/bootstrap.min.css">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
   <style>
     :root {
-      --wa-green: #00a884;
+      --wa-primary: #00a884;
       --wa-dark: #008069;
-      --bg-light: #f0f2f5;
+      --wa-bg-app: #f0f2f5;
+      --wa-bg-chat: #efeae2;
+      --text-main: #111b21;
+      --text-muted: #667781;
+      --border-color: #d1d7db;
     }
-    
+
     body {
       font-family: 'Inter', sans-serif;
-      background-color: var(--bg-light);
-      color: #3b3e49;
+      background-color: #e3e6e8;
       height: 100vh;
+      margin: 0;
       overflow: hidden;
+      display: flex;
+      justify-content: center;
+      align-items: center;
     }
-    
-    /* Layout Structure */
-    .app-container {
+
+    /* Layout Utama ala WhatsApp Web */
+    .app-wrapper {
+      width: 100%;
+      height: 100vh;
+      background: #fff;
       display: flex;
       flex-direction: column;
-      height: 100vh;
+      box-shadow: 0 6px 18px rgba(0, 0, 0, 0.05);
     }
-    
-    .header {
-      background: linear-gradient(135deg, var(--wa-dark), var(--wa-green));
-      padding: 20px 40px;
+
+    @media (min-width: 1440px) {
+      .app-wrapper {
+        width: 95%;
+        height: 95vh;
+        border-radius: 12px;
+        overflow: hidden;
+      }
+
+      body {
+        background-color: #d1d7db;
+      }
+
+      body::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 127px;
+        background-color: var(--wa-dark);
+        z-index: -1;
+      }
+    }
+
+    /* Header Navbar */
+    .app-header {
+      background-color: var(--wa-dark);
+      padding: 12px 24px;
       color: white;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      z-index: 10;
     }
-    
-    .main-content {
+
+    /* Area Konten Bawah */
+    .app-body {
+      display: flex;
       flex: 1;
-      padding: 25px 40px;
-      overflow-y: auto;
+      overflow: hidden;
+      background: var(--wa-bg-app);
     }
-    
-    /* Card Styles */
-    .glass-card {
-      background: white;
-      border-radius: 12px;
-      border: none;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.05);
-      margin-bottom: 20px;
-    }
-    
-    /* QR Code Area */
-    #qrcode {
-      max-width: 250px;
-      width: 100%;
-      margin: 20px auto;
-      border: 10px solid #fff;
-      box-shadow: 0 0 15px rgba(0,0,0,0.1);
-      border-radius: 8px;
-    }
-    
-    /* Chat List Area */
-    #chat-list {
-      max-height: 550px;
-      overflow-y: auto;
-      border-radius: 8px;
+
+    /* Sidebar Kiri (Status, Log, Chat List) */
+    .sidebar {
+      width: 380px;
       background: #fff;
+      display: flex;
+      flex-direction: column;
+      border-right: 1px solid var(--border-color);
+      z-index: 5;
     }
-    
+
+    .sidebar-header {
+      padding: 15px;
+      background: var(--wa-bg-app);
+      border-bottom: 1px solid var(--border-color);
+    }
+
+    /* Log Panel */
+    .log-panel {
+      background: #111b21;
+      color: #4ade80;
+      font-family: 'Courier New', monospace;
+      font-size: 11px;
+      padding: 10px;
+      border-radius: 6px;
+      height: 100px;
+      overflow-y: auto;
+      margin-top: 10px;
+    }
+
+    /* Chat List Area */
+    #chat-list-container {
+      flex: 1;
+      overflow-y: auto;
+    }
+
     .chat-item {
       display: flex;
       align-items: center;
       padding: 12px 15px;
-      border-bottom: 1px solid #f0f2f5;
-      transition: all 0.2s;
+      border-bottom: 1px solid var(--wa-bg-app);
       cursor: pointer;
+      transition: background 0.2s;
     }
-    
-    .chat-item:hover { background-color: #f8f9fa; }
-    .chat-item.active { background-color: #e9f5f2; border-left: 4px solid var(--wa-green); }
-    
+
+    .chat-item:hover {
+      background-color: var(--wa-bg-app);
+    }
+
+    .chat-item.active {
+      background-color: #f0f2f5;
+    }
+
     .profile-pic {
-      width: 50px; height: 50px;
+      width: 48px;
+      height: 48px;
       border-radius: 50%;
       margin-right: 15px;
-      background: #eee;
+      background: #dfe5e7;
       object-fit: cover;
     }
-    
-    .chat-details { flex: 1; min-width: 0; }
-    .chat-top { display: flex; justify-content: space-between; align-items: center; }
-    .chat-name { font-weight: 600; font-size: 15px; color: #111b21; }
-    .chat-time { font-size: 12px; color: #667781; }
-    .chat-msg { font-size: 13px; color: #667781; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    
+
+    .chat-details {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .chat-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      margin-bottom: 2px;
+    }
+
+    .chat-name {
+      font-weight: 500;
+      font-size: 15px;
+      color: var(--text-main);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .chat-time {
+      font-size: 12px;
+      color: var(--text-muted);
+    }
+
+    .chat-msg {
+      font-size: 13px;
+      color: var(--text-muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
     .unread-badge {
-      background: var(--wa-green);
+      background: var(--wa-primary);
       color: white;
       font-size: 11px;
-      padding: 2px 7px;
-      border-radius: 10px;
+      padding: 2px 6px;
+      border-radius: 12px;
       font-weight: bold;
+      min-width: 20px;
+      text-align: center;
     }
-    
-    /* Log Panel */
-    .log-panel {
-      background: #1e1e1e;
-      color: #00ff00;
-      font-family: 'Courier New', monospace;
-      font-size: 12px;
-      padding: 15px;
-      border-radius: 8px;
-      max-height: 200px;
+
+    /* Ruang Obrolan Kanan (Main Chat Area) */
+    .main-chat {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      background-color: var(--wa-bg-chat);
+      position: relative;
+    }
+
+    /* Placeholder jika tidak ada chat dipilih */
+    #chat-placeholder {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      background-color: var(--wa-bg-app);
+      color: var(--text-muted);
+      text-align: center;
+    }
+
+    #chat-placeholder i {
+      font-size: 4rem;
+      color: #c0c9cc;
+      margin-bottom: 20px;
+    }
+
+    /* Chat Window Header */
+    .chat-window-header {
+      padding: 12px 24px;
+      background: var(--wa-bg-app);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+    }
+
+    /* Area Pesan */
+    #message-container {
+      flex: 1;
+      padding: 40px 5%;
       overflow-y: auto;
+      display: flex;
+      flex-direction: column;
     }
-    
-    /* Animations */
-    .loader {
-      border: 4px solid #f3f3f3;
-      border-top: 4px solid var(--wa-green);
-      border-radius: 50%;
-      width: 40px; height: 40px;
-      animation: spin 1s linear infinite;
-      margin: 20px auto;
+
+    .message-wrapper {
+      display: flex;
+      margin-bottom: 8px;
+      flex-direction: column;
     }
-    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-    
-    .message-wrapper { display: flex; margin-bottom: 10px; flex-direction: column; }
-    .message-wrapper.me { align-items: flex-end; }
-    .message-wrapper.them { align-items: flex-start; }
-    
+
+    .message-wrapper.me {
+      align-items: flex-end;
+    }
+
+    .message-wrapper.them {
+      align-items: flex-start;
+    }
+
     .message-bubble {
-      max-width: 70%;
+      max-width: 65%;
       padding: 8px 12px;
       border-radius: 8px;
+      font-size: 14.5px;
+      color: var(--text-main);
+      box-shadow: 0 1px 1px rgba(11, 20, 26, .09);
       position: relative;
-      font-size: 14px;
     }
-    .me .message-bubble { background-color: #dcf8c6; border-top-right-radius: 0; }
-    .them .message-bubble { background-color: #ffffff; border-top-left-radius: 0; box-shadow: 0 1px 1px rgba(0,0,0,0.1); }
-    
-    .message-time { font-size: 10px; color: #888; text-align: right; margin-top: 4px; }
-    .chat-item.active { background-color: #ebebeb; border-left: 4px solid var(--wa-green); }
-    .unread-badge { background: var(--wa-green); color: white; border-radius: 50%; padding: 2px 7px; font-size: 11px; }
-    
-    @media (max-width: 768px) {
-      .header, .main-content { padding: 15px; }
-      .main-content { overflow-y: visible; }
+
+    .me .message-bubble {
+      background-color: #d9fdd3;
+      border-top-right-radius: 0;
+    }
+
+    .them .message-bubble {
+      background-color: #ffffff;
+      border-top-left-radius: 0;
+    }
+
+    .message-time {
+      font-size: 11px;
+      color: var(--text-muted);
+      text-align: right;
+      margin-top: 2px;
+      margin-left: 15px;
+      float: right;
+    }
+
+    /* Input Area Bawah */
+    .chat-input-area {
+      padding: 15px 24px;
+      background: var(--wa-bg-app);
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    .chat-input-area input {
+      flex: 1;
+      padding: 12px 20px;
+      border: none;
+      border-radius: 24px;
+      font-size: 15px;
+      outline: none;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, 0.05);
+    }
+
+    .btn-send {
+      background: var(--wa-primary);
+      color: white;
+      border: none;
+      width: 45px;
+      height: 45px;
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      cursor: pointer;
+      transition: 0.2s;
+    }
+
+    .btn-send:hover {
+      background: var(--wa-dark);
+    }
+
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+    }
+
+    ::-webkit-scrollbar-track {
+      background: transparent;
+    }
+
+    ::-webkit-scrollbar-thumb {
+      background: #bcc0c4;
+      border-radius: 10px;
+    }
+
+    ::-webkit-scrollbar-thumb:hover {
+      background: #a6abae;
+    }
+
+    /* Utilities */
+    .status-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #dc3545;
+      margin-right: 5px;
+    }
+
+    .status-indicator.connected {
+      background: #25D366;
+    }
+
+    .loader {
+      border: 3px solid #f3f3f3;
+      border-top: 3px solid var(--wa-primary);
+      border-radius: 50%;
+      width: 24px;
+      height: 24px;
+      animation: spin 1s linear infinite;
+    }
+
+    @keyframes spin {
+      0% {
+        transform: rotate(0deg);
+      }
+
+      100% {
+        transform: rotate(360deg);
+      }
     }
   </style>
 </head>
+
 <body>
-  
-  <div class="app-container">
-    <header class="header d-flex justify-content-between align-items-center">
+
+  <div class="app-wrapper">
+    <header class="app-header">
       <div>
-        <h4 class="m-0 font-weight-bold" id="client-title">WhatsApp Gateway</h4>
+        <h5 class="m-0 font-weight-bold d-flex align-items-center">
+          <span id="client-title">Gateway</span>
+          <span class="badge badge-light text-success ml-3 shadow-sm border-0" style="font-size: 11px; display: none;"
+            id="version-badge">
+            <i class="fas fa-code-branch"></i> wwebjs v<span id="wwebjs-ver">...</span>
+          </span>
+        </h5>
         <small class="opacity-75">CV Tekno Solusi Digital</small>
       </div>
-      <div class="btn-group">
-        <button onclick="logoutSession()" class="btn btn-light btn-sm font-weight-bold text-danger mr-2">
-          <i class="fas fa-sign-out-alt"></i> Keluar Akun
+      <div>
+        <button onclick="logoutSession()" class="btn btn-sm btn-danger font-weight-bold mr-2 border-0 shadow-sm">
+          <i class="fas fa-sign-out-alt"></i> Keluar WA
         </button>
-        <a href="/logout" class="btn btn-outline-light btn-sm">
+        <a href="/logout" class="btn btn-sm btn-outline-light border-0">
           <i class="fas fa-power-off"></i> Logout Sistem
         </a>
       </div>
     </header>
-    
-    <main class="main-content">
-      <div class="row">
-        <div class="col-lg-8">
-          <div id="instruction-area" class="glass-card p-4 text-center">
-            <h5 class="font-weight-bold mb-3">Hubungkan Perangkat</h5>
-            <p class="text-muted">Gunakan WhatsApp di ponsel Anda untuk memindai kode QR di sebelah kanan.</p>
-            <div class="text-left d-inline-block">
-              <small class="d-block mb-1"><i class="fas fa-check-circle text-success"></i> Buka WhatsApp di HP</small>
-              <small class="d-block mb-1"><i class="fas fa-check-circle text-success"></i> Menu > Perangkat Tertaut</small>
-              <small class="d-block"><i class="fas fa-check-circle text-success"></i> Klik Tautkan Perangkat</small>
+
+    <div class="app-body">
+      <aside class="sidebar">
+        <div class="sidebar-header">
+          <div class="d-flex justify-content-between align-items-center mb-2">
+            <span class="font-weight-bold" style="font-size: 14px; color: var(--text-main);">
+              <span class="status-indicator" id="conn-indicator"></span>
+              <span id="conn-text">Menunggu koneksi...</span>
+            </span>
+            <button id="btn-fetch-chats" class="btn btn-sm btn-light border" style="display:none;" title="Refresh Chat">
+              <i class="fas fa-sync-alt text-muted"></i>
+            </button>
+          </div>
+
+          <div id="auth-area" class="text-center py-3">
+            <div id="loaderqr" class="loader mx-auto mb-2"></div>
+            <img src="" alt="QR Code" id="qrcode" class="img-fluid rounded shadow-sm border"
+              style="display:none; max-width: 180px;">
+            <p id="instruction-text" class="small text-muted mt-2 mb-0" style="display:none;">Scan QR ini menggunakan
+              WhatsApp Anda</p>
+            <div class="mt-2">
+              <button id="btn-regenerate-qr" class="btn btn-sm btn-outline-primary" style="display:none;">Regenerate QR</button>
+              <small id="qr-count-info" class="d-block text-muted mt-2" style="display:none;"></small>
             </div>
           </div>
-          
-          <div id="chat-list-area" class="glass-card" style="display:none;">
-            <div class="p-3 border-bottom d-flex justify-content-between align-items-center bg-light">
-              <h6 class="m-0 font-weight-bold"><i class="fab fa-whatsapp"></i> Chat Terbaru</h6>
-              <button id="btn-fetch-chats" class="btn btn-wa-green btn-sm text-white" style="background-color: var(--wa-green);">
-                <i class="fas fa-sync-alt"></i> Refresh Chat
-              </button>
-            </div>
-            <div id="chat-loader" style="display:none;" class="text-center p-5">
-              <div class="loader"></div>
-              <p class="small text-muted">Mengambil data dari WhatsApp...</p>
-            </div>
-            <ul id="chat-list" class="list-group list-group-flush">
-            </ul>
-          </div>
-        </div>
-        
-        <div class="col-lg-4">
-          <div class="glass-card p-4 text-center mb-4">
-            <h6 class="font-weight-bold mb-3">Status Koneksi</h6>
-            
-            <div id="loaderqr" class="loader"></div>
-            
-            <div id="authenticated" style="display:none;" class="mb-3">
-              <div class="alert alert-success py-2">
-                <i class="fas fa-check-circle"></i> <strong>Terhubung</strong>
-              </div>
-            </div>
-            
-            <img src="" alt="QR Code" id="qrcode" class="img-fluid" style="display:none;">
-            
-            <div class="mt-4 text-left">
-              <label class="small font-weight-bold text-muted"><i class="fas fa-terminal"></i> Log Aktivitas:</label>
-              <div class="log-panel" id="log-container">
-                <ul class="logs list-unstyled m-0"></ul>
-              </div>
-            </div>
+
+          <div class="log-panel" id="log-container">
+            <ul class="logs list-unstyled m-0"></ul>
           </div>
         </div>
-      </div>
-    </main>
+
+        <div id="chat-list-container">
+          <div id="chat-loader" style="display:none;" class="text-center p-4">
+            <div class="loader mx-auto"></div>
+            <p class="small text-muted mt-2">Memuat pesan...</p>
+          </div>
+          <ul id="chat-list" class="list-unstyled m-0">
+          </ul>
+        </div>
+      </aside>
+
+      <main class="main-chat">
+
+        <div id="chat-placeholder">
+          <i class="fab fa-whatsapp"></i>
+          <h4 class="font-weight-normal text-dark">WhatsApp Gateway Aktif</h4>
+          <p>Pilih pesan di sebelah kiri untuk mulai membaca dan membalas obrolan.</p>
+        </div>
+
+        <div id="chat-window" class="d-none h-100 d-flex flex-column w-100">
+          <div class="chat-window-header">
+            <div class="profile-pic" style="width: 40px; height: 40px;"></div>
+            <div class="ml-3">
+              <h6 class="m-0 font-weight-bold" id="active-chat-name" style="color: var(--text-main);">Nama Kontak</h6>
+              <small class="text-muted" id="active-chat-number">...</small>
+            </div>
+          </div>
+
+          <div id="message-container">
+          </div>
+
+          <div class="chat-input-area">
+            <input type="text" id="input-message" placeholder="Ketik pesan balasan disini..." autocomplete="off">
+            <button id="btn-send-message" class="btn-send">
+              <i class="fas fa-paper-plane"></i>
+            </button>
+          </div>
+        </div>
+
+      </main>
+    </div>
   </div>
-  
+
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.3.0/socket.io.js"></script>
-  
+
   <script>
     const pathParts = window.location.pathname.split('/');
     const clientId = pathParts[pathParts.length - 1];
     let activeChatId = null;
-    // Update Title UI
+
+    // Update Title
     $('#client-title').text('Gateway: ' + clientId.toUpperCase());
-    
+
     const socket = io({ reconnection: true, reconnectionAttempts: 10 });
-    
-    $(document).ready(function() {
+
+    $(document).ready(function () {
       socket.emit('join_room', clientId);
-      
-      // Fetch Chat Manual
-      // $('#btn-fetch-chats').on('click', fetchAndRenderChats);
+
       $('#btn-fetch-chats').on('click', loadChats);
-      
-      // Socket Events
-      socket.on('qr', function(src) {
-        $('#qrcode').attr('src', src).show();
-        $('#loaderqr, #authenticated').hide();
-        $('#instruction-area').show();
-        $('#chat-list-area').hide();
+      socket.on('app_info', function (data) {
+        if (data.wwebjsVersion) {
+          $('#wwebjs-ver').text(data.wwebjsVersion);
+          $('#version-badge').fadeIn(); // Munculkan badge dengan animasi halus
+        }
       });
-      
-      socket.on('ready', function() {
+      // Socket Events
+      socket.on('qr', function (src) {
+        $('#qrcode').attr('src', src).show();
+        $('#loaderqr').hide();
+        $('#instruction-text').show();
+        updateStatus(false, 'Menunggu Scan QR');
+        // Hide regenerate button when a fresh QR is shown
+        $('#btn-regenerate-qr').hide();
+        $('#qr-count-info').hide();
+      });
+
+      socket.on('ready', function () {
         showReadyState();
         addLog('WhatsApp Siap digunakan.');
       });
-      
-      socket.on('authenticated', function() {
+
+      socket.on('authenticated', function () {
         showReadyState();
         addLog('Autentikasi Berhasil.');
       });
-      
-      socket.on('message', function(msg) {
+
+      socket.on('message', function (msg) {
         addLog(msg);
       });
-      
+
+      // Jika server menginformasikan bahwa batas generate QR tercapai
+      socket.on('qr_limit_reached', function (data) {
+        addLog(`QR generation diblokir setelah ${data.count || 0} percobaan (limit ${data.limit}).`);
+        $('#loaderqr').hide();
+        $('#qrcode').hide();
+        $('#instruction-text').hide();
+        $('#qr-count-info').text(`Percobaan: ${data.count || 0} / ${data.limit}`).show();
+        $('#btn-regenerate-qr').show().prop('disabled', false);
+        updateStatus(false, 'QR diblokir');
+      });
+
       socket.on('new_message', (data) => {
-        // Update daftar chat di sidebar tanpa refresh halaman
-        loadChats(); 
-        
-        // Jika pesan masuk berasal dari chat yang sedang dibuka, muat ulang isi chat
+        loadChats();
         if (activeChatId === data.from) {
           openChat(data.from, data.name);
         }
-        
-        addLog(`Pesan baru dari ${data.name}: ${data.body}`);
+        addLog(`Pesan baru dari ${data.name}`);
       });
-      
-      $('#btn-send-message').click(async function() {
+
+      // Kirim Pesan dengan Enter
+      $('#input-message').keypress(function (e) {
+        if (e.which == 13) { $('#btn-send-message').click(); }
+      });
+
+      $('#btn-send-message').click(async function () {
         const messageInput = $('#input-message');
         const message = messageInput.val();
-        
+
         if (!message || !activeChatId) return;
-        
+
+        // Optimistic UI (Tambahkan bubble sementara)
+        const tempHtml = `
+            <div class="message-wrapper me text-muted opacity-50">
+                <div class="message-bubble">
+                    <div class="message-text">${message}</div>
+                    <div class="message-time"><i class="far fa-clock"></i> Mengirim...</div>
+                </div>
+            </div>`;
+        $('#message-container').append(tempHtml).scrollTop($('#message-container')[0].scrollHeight);
+        messageInput.val('');
+
         try {
           const response = await fetch(`/api/send-message/${clientId}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
-              number: activeChatId, 
-              message: message 
-            })
+            body: JSON.stringify({ number: activeChatId, message: message })
           });
-          
+
           const result = await response.json();
           if (result.status) {
-            messageInput.val('');
-            // Refresh window chat untuk melihat pesan kita sendiri
             openChat(activeChatId, $('#active-chat-name').text());
+            loadChats(); // Pindahkan chat ke atas
           }
         } catch (e) {
-          alert('Gagal mengirim pesan');
+          addLog('Gagal mengirim pesan');
         }
       });
-      
+
+      // Regenerate QR button
+      $('#btn-regenerate-qr').click(function () {
+        $(this).prop('disabled', true);
+        $('#loaderqr').show();
+        $('#qr-count-info').text('Meminta QR baru...').show();
+        socket.emit('regenerate_qr', clientId);
+      });
     });
-    
-    function showReadyState() {
-      $('#loaderqr, #qrcode, #instruction-area').hide();
-      $('#authenticated, #chat-list-area').show();
+
+    function updateStatus(isConnected, text) {
+      const indicator = $('#conn-indicator');
+      $('#conn-text').text(text);
+      if (isConnected) {
+        indicator.addClass('connected');
+        $('#btn-fetch-chats').show();
+      } else {
+        indicator.removeClass('connected');
+        $('#btn-fetch-chats').hide();
+      }
     }
-    
+
+    function showReadyState() {
+      $('#auth-area').slideUp();
+      updateStatus(true, 'Terhubung');
+      loadChats(); // Otomatis load chat saat ready
+    }
+
     function addLog(msg) {
       $('.logs').append($('<li>').addClass('mb-1').text('> ' + msg));
-        const container = document.getElementById('log-container');
-        container.scrollTop = container.scrollHeight;
-      }
-      
-      async function fetchAndRenderChats() {
-        const chatListEl = $('#chat-list');
-        const chatLoaderEl = $('#chat-loader');
-        
-        chatLoaderEl.show();
-        chatListEl.empty();
-        
+      const container = document.getElementById('log-container');
+      container.scrollTop = container.scrollHeight;
+    }
+
+    async function logoutSession() {
+      if (confirm('Putuskan koneksi WhatsApp dan hapus sesi ini?')) {
         try {
-          const response = await fetch(`/api/chats/${clientId}`, {
-            method: 'GET',
-            headers: {
-              'Accept': 'application/json'
-            }
+          const response = await fetch(`/api/logout-wa/${clientId}`);
+          const result = await response.json();
+          if (result.status) {
+            window.location.href = '/logout';
+          }
+        } catch (e) {
+          alert('Gagal logout: ' + e.message);
+        }
+      }
+    }
+
+    // Buka Chat Obrolan
+    async function openChat(chatId, chatName) {
+      activeChatId = chatId;
+
+      // UI Update
+      $('.chat-item').removeClass('active');
+      $(`li[onclick*="${chatId}"]`).addClass('active');
+
+      $('#chat-placeholder').addClass('d-none');
+      $('#chat-window').removeClass('d-none').addClass('d-flex');
+      $('#active-chat-name').text(chatName);
+      $('#active-chat-number').text(chatId.replace('@c.us', ''));
+
+      const messageContainer = $('#message-container');
+      messageContainer.html('<div class="text-center mt-5"><div class="loader mx-auto mb-2"></div><small class="text-muted">Memuat percakapan...</small></div>');
+
+      try {
+        const response = await fetch(`/api/messages/${clientId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ number: chatId })
+        });
+        const result = await response.json();
+
+        if (result.status) {
+          messageContainer.empty();
+          result.data.forEach(msg => {
+            const isMe = msg.fromMe;
+            const timeRaw = new Date(msg.timestamp * 1000);
+            const timeStr = timeRaw.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+            const html = `
+                  <div class="message-wrapper ${isMe ? 'me' : 'them'}">
+                      <div class="message-bubble">
+                          <div class="message-text">${msg.body.replace(/\n/g, '<br>')}</div>
+                          <div class="message-time">${timeStr}</div>
+                      </div>
+                  </div>`;
+            messageContainer.append(html);
           });
-          const result = await response.json();
-          
-          chatLoaderEl.hide();
-          if (result.status) {
-            result.data.forEach(chat => {
-              const time = chat.timestamp ? new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
-              const html = `
-                        <li class="chat-item">
-                            <img src="${chat.profilePic || 'https://via.placeholder.com/50'}" class="profile-pic">
-                            <div class="chat-details">
-                                <div class="chat-top">
-                                    <span class="chat-name">${chat.name}</span>
-                                    <span class="chat-time">${time}</span>
-                                </div>
-                                <div class="chat-msg">${chat.lastMessage || 'Tidak ada pesan'}</div>
-                            </div>
-                            ${chat.unreadCount > 0 ? `<span class="unread-badge ml-2">${chat.unreadCount}</span>` : ''}
-                        </li>`;
-              chatListEl.append(html);
-            });
-          }
-        } catch (e) {
-          chatLoaderEl.hide();
-          addLog('Error: Gagal memuat chat.');
+          messageContainer.scrollTop(messageContainer[0].scrollHeight);
         }
+      } catch (e) {
+        addLog('Error: Gagal memuat pesan ' + chatId);
       }
-      
-      async function logoutSession() {
-        if (confirm('Putuskan koneksi WhatsApp dan hapus sesi ini?')) {
-          try {
-            const response = await fetch(`/api/logout-wa/${clientId}`);
-            const result = await response.json();
-            if (result.status) {
-              alert('Berhasil Logout. Anda akan dialihkan ke halaman login.');
-              window.location.href = '/logout'; // Logout dari sistem juga
-            }
-          } catch (e) {
-            alert('Gagal logout: ' + e.message);
-          }
-        }
-      }
-      
-      // 2. Fungsi untuk membuka chat (Menampilkan isi pesan)
-      async function openChat(chatId, chatName) {
-        activeChatId = chatId;
-        
-        // UI Feedback: Tandai chat yang aktif di sidebar
-        $('.chat-item').removeClass('active');
-        $(`li[onclick*="${chatId}"]`).addClass('active');
-        
-        // Tampilkan panel chat dan set nama
-        $('#chat-placeholder').addClass('d-none');
-        $('#chat-window').removeClass('d-none');
-        $('#active-chat-name').text(chatName);
-        
-        const messageContainer = $('#message-container');
-        messageContainer.html('<div class="text-center mt-5"><i class="fas fa-spinner fa-spin"></i> Memuat pesan...</div>');
-        
-        try {
-          const response = await fetch(`/api/messages/${clientId}`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ number: chatId })
+    }
+
+    // Load Daftar Chat Kiri
+    async function loadChats() {
+      const chatListEl = $('#chat-list');
+      if (chatListEl.children().length === 0) $('#chat-loader').show();
+
+      try {
+        const response = await fetch(`/api/chats/${clientId}`);
+        const result = await response.json();
+
+        $('#chat-loader').hide();
+        if (result.status) {
+          chatListEl.empty();
+          result.data.forEach(chat => {
+            const dynamicTime = formatChatTime(chat.timestamp);
+            const activeClass = activeChatId === chat.id ? 'active' : '';
+
+            const html = `
+              <li class="chat-item ${activeClass}" onclick="openChat('${chat.id}', '${chat.name.replace(/'/g, "\\'")}')">
+                  <img src="${chat.profilePic || 'https://via.placeholder.com/50/dfe5e7/667781?text=' + chat.name.charAt(0)}" class="profile-pic">
+                  <div class="chat-details">
+                      <div class="chat-top">
+                          <span class="chat-name">${chat.name}</span>
+                          <span class="chat-time">${dynamicTime}</span>
+                      </div>
+                      <div class="d-flex justify-content-between align-items-center" style="margin-top: 2px;">
+                          <div class="chat-msg text-truncate" style="max-width: 85%;">${chat.lastMessage || '<i>Tidak ada pesan</i>'}</div>
+                          ${chat.unreadCount > 0 ? `<span class="unread-badge">${chat.unreadCount}</span>` : ''}
+                      </div>
+                  </div>
+              </li>`;
+            chatListEl.append(html);
           });
-          const result = await response.json();
-          
-          if (result.status) {
-            messageContainer.empty();
-            result.data.forEach(msg => {
-              const isMe = msg.fromMe;
-              const html = `
-                    <div class="message-wrapper ${isMe ? 'me' : 'them'}">
-                        <div class="message-bubble shadow-sm">
-                            <div class="message-text">${msg.body}</div>
-                            <div class="message-time">${new Date(msg.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</div>
-                        </div>
-                    </div>`;
-              messageContainer.append(html);
-            });
-            // Auto scroll ke bawah
-            messageContainer.scrollTop(messageContainer[0].scrollHeight);
-          }
-        } catch (e) {
-          addLog('Error: Gagal memuat pesan.');
         }
+      } catch (e) {
+        $('#chat-loader').hide();
+        addLog('Error: Gagal merender daftar obrolan.');
       }
-      
-      // 3. Modifikasi fungsi loadChats agar elemen bisa diklik
-      async function loadChats() {
-        const chatListEl = $('#chat-list');
-        try {
-          const response = await fetch(`/api/chats/${clientId}`); // Sesuaikan endpoint dengan app-tekno-secure.js
-          const result = await response.json();
-          
-          if (result.status) {
-            chatListEl.empty();
-            result.data.forEach(chat => {
-              const time = chat.timestamp ? new Date(chat.timestamp * 1000).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) : '';
-              const activeClass = activeChatId === chat.id ? 'active' : '';
-              
-              const html = `
-                    <li class="chat-item ${activeClass}" onclick="openChat('${chat.id}', '${chat.name.replace(/'/g, "\\'")}')">
-                        <img src="${chat.profilePic || 'https://via.placeholder.com/50'}" class="profile-pic">
-                        <div class="chat-details">
-                            <div class="chat-top">
-                                <span class="chat-name">${chat.name}</span>
-                                <span class="chat-time">${time}</span>
-                            </div>
-                            <div class="chat-msg text-truncate">${chat.lastMessage || '<i>Tidak ada pesan</i>'}</div>
-                        </div>
-                        ${chat.unreadCount > 0 ? `<span class="unread-badge">${chat.unreadCount}</span>` : ''}
-                    </li>`;
-              chatListEl.append(html);
-            });
-          }
-        } catch (e) {
-          addLog('Error: Gagal memuat daftar chat.');
-        }
+    }
+
+    // Helper untuk memformat timestamp menjadi tanggal dinamis ala WhatsApp Web
+    function formatChatTime(timestamp) {
+      if (!timestamp) return '';
+
+      // Konversi unix timestamp (detik) ke JavaScript Date object (milidetik)
+      const date = new Date(timestamp * 1000);
+      const now = new Date();
+
+      // Set waktu ke angka 0 untuk komparasi tanggal murni (Midnight)
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const yesterday = new Date(today);
+      yesterday.setDate(yesterday.getDate() - 1);
+
+      const compareDate = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+
+      // 1. Jika Hari Ini -> Tampilkan Jam (Contoh: 17:05)
+      if (compareDate.getTime() === today.getTime()) {
+        return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
       }
-    </script>
-  </body>
-  </html>
+
+      // 2. Jika Kemarin -> Tampilkan Teks 'Kemarin'
+      if (compareDate.getTime() === yesterday.getTime()) {
+        return 'Kemarin';
+      }
+
+      // 3. Jika Sembinggu Ini -> Tampilkan Nama Hari (Contoh: Kamis)
+      const diffTime = today.getTime() - compareDate.getTime();
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (diffDays < 7) {
+        const days = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+        return days[date.getDay()];
+      }
+
+      // 4. Lebih dari Seminggu -> Tampilkan Tanggal Ringkas (Contoh: 22/05/2026)
+      return date.toLocaleDateString('id-ID', { day: '2-digit', month: '2-digit', year: 'numeric' });
+    }
+  </script>
+</body>
+
+</html>
