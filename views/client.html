@@ -406,14 +406,43 @@
           </div>
 
           <div id="auth-area" class="text-center py-3">
+            <div id="auth-methods" class="btn-group btn-group-sm mb-3 w-100" role="group" style="display:none;">
+              <button type="button" id="btn-tab-qr" class="btn btn-primary">Scan QR</button>
+              <button type="button" id="btn-tab-phone" class="btn btn-outline-primary">Nomor HP</button>
+            </div>
+
             <div id="loaderqr" class="loader mx-auto mb-2"></div>
-            <img src="" alt="QR Code" id="qrcode" class="img-fluid rounded shadow-sm border"
-              style="display:none; max-width: 180px;">
-            <p id="instruction-text" class="small text-muted mt-2 mb-0" style="display:none;">Scan QR ini menggunakan
-              WhatsApp Anda</p>
-            <div class="mt-2">
-              <button id="btn-regenerate-qr" class="btn btn-sm btn-outline-primary" style="display:none;">Regenerate QR</button>
-              <small id="qr-count-info" class="d-block text-muted mt-2" style="display:none;"></small>
+
+            <div id="qr-section" style="display:none;">
+              <img src="" alt="QR Code" id="qrcode" class="img-fluid rounded shadow-sm border"
+                style="max-width: 180px;">
+              <p id="instruction-text" class="small text-muted mt-2 mb-0">Scan QR ini menggunakan WhatsApp Anda</p>
+              <div class="mt-2">
+                <button id="btn-regenerate-qr" class="btn btn-sm btn-outline-primary" style="display:none;">Regenerate
+                  QR</button>
+                <small id="qr-count-info" class="d-block text-muted mt-2" style="display:none;"></small>
+              </div>
+            </div>
+
+            <div id="phone-section" style="display:none; padding: 0 15px;">
+              <p class="small text-muted mb-2">Login tanpa kamera. Masukkan nomor WA yang akan dihubungkan.</p>
+              <div class="input-group input-group-sm mb-2">
+                <div class="input-group-prepend">
+                  <span class="input-group-text">+</span>
+                </div>
+                <input type="text" id="phone-input" class="form-control" placeholder="6281234567890">
+              </div>
+              <button id="btn-request-code" class="btn btn-sm btn-success w-100 font-weight-bold">
+                Minta Kode Tautan
+              </button>
+
+              <div id="pairing-code-display" class="mt-3 py-2 bg-light border rounded font-weight-bold text-dark"
+                style="font-size: 24px; letter-spacing: 4px; display:none;">
+              </div>
+              <p id="phone-instruction" class="small text-muted mt-2 text-success font-weight-bold"
+                style="display:none;">
+                Buka notifikasi WhatsApp di HP Anda dan masukkan kode di atas!
+              </p>
             </div>
           </div>
 
@@ -466,6 +495,7 @@
 
   <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/2.3.0/socket.io.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
 
   <script>
     const pathParts = window.location.pathname.split('/');
@@ -487,16 +517,28 @@
           $('#version-badge').fadeIn(); // Munculkan badge dengan animasi halus
         }
       });
-      // Socket Events
-      socket.on('qr', function (src) {
-        $('#qrcode').attr('src', src).show();
-        $('#loaderqr').hide();
-        $('#instruction-text').show();
-        updateStatus(false, 'Menunggu Scan QR');
-        // Hide regenerate button when a fresh QR is shown
-        $('#btn-regenerate-qr').hide();
-        $('#qr-count-info').hide();
+
+      socket.on('loading_screen', function () {
+        $('#auth-area').show();
+        $('#loaderqr').show();
+        $('#auth-methods').hide();
+        $('#qr-section').hide();
+        $('#phone-section').hide();
+        updateStatus(false, 'Menyiapkan WhatsApp Web...');
       });
+
+      socket.on('loading_screen_pairing', function () {
+        $('#auth-area').show();
+        $('#loaderqr').show();
+        $('#auth-methods').show();
+        $('#qr-section').hide();
+        $('#phone-section').show();
+        $('#pairing-code-display').hide().text('');
+        $('#phone-instruction').hide();
+        updateStatus(false, 'Meminta pairing code...');
+      });
+
+      // Socket Events
 
       socket.on('ready', function () {
         showReadyState();
@@ -504,8 +546,9 @@
       });
 
       socket.on('authenticated', function () {
-        showReadyState();
-        addLog('Autentikasi Berhasil.');
+        $('#auth-area').slideUp();
+        updateStatus(false, 'Autentikasi berhasil, menunggu siap...');
+        addLog('Autentikasi berhasil. Menunggu WhatsApp siap...');
       });
 
       socket.on('message', function (msg) {
@@ -523,12 +566,139 @@
         updateStatus(false, 'QR diblokir');
       });
 
+      socket.on('auth_limit_reached', async function (data) {
+        $('#loaderqr').hide();
+        addLog(`Batas update ${data.mode === 'pairing' ? 'pairing code' : 'QR code'} tercapai setelah ${data.count || 0}x.`);
+
+        const title = data.mode === 'pairing' ? 'Pairing code dihentikan sementara' : 'QR code dihentikan sementara';
+        const text = `Kode sudah diperbarui ${data.count || 0}x. Apakah Anda masih di sana dan ingin melanjutkan?`;
+
+        const fireAlert = async () => {
+          const result = await Swal.fire({
+            title,
+            text,
+            icon: 'question',
+            showCancelButton: true,
+            confirmButtonText: 'Ya, lanjutkan',
+            cancelButtonText: 'Tidak'
+          });
+
+          if (result.isConfirmed) {
+            socket.emit('auth_retry', {
+              clientId: clientId,
+              mode: data.mode
+            });
+          } else {
+            addLog('User memilih tidak melanjutkan autentikasi.');
+          }
+        };
+
+        if (typeof Swal !== 'undefined' && Swal.fire) {
+          fireAlert();
+        } else {
+          if (confirm(text)) {
+            socket.emit('auth_retry', {
+              clientId: clientId,
+              mode: data.mode
+            });
+          }
+        }
+      });
+
       socket.on('new_message', (data) => {
         loadChats();
         if (activeChatId === data.from) {
           openChat(data.from, data.name);
         }
         addLog(`Pesan baru dari ${data.name}`);
+      });
+
+      // Toggle ke Mode QR
+      $('#btn-tab-qr').click(function () {
+        $(this).removeClass('btn-outline-primary').addClass('btn-primary');
+        $('#btn-tab-phone').removeClass('btn-primary').addClass('btn-outline-primary');
+        $('#phone-section').hide();
+        $('#qr-section').fadeIn();
+      });
+
+      // Toggle ke Mode Nomor HP
+      $('#btn-tab-phone').click(function () {
+        $(this).removeClass('btn-outline-primary').addClass('btn-primary');
+        $('#btn-tab-qr').removeClass('btn-primary').addClass('btn-outline-primary');
+        $('#qr-section').hide();
+        $('#phone-section').fadeIn();
+      });
+
+      // Aksi minta Pairing Code
+      $('#btn-request-code').click(function () {
+        const phoneInput = $('#phone-input').val().trim();
+        if (!phoneInput) return alert('Silakan masukkan nomor telepon terlebih dahulu!');
+
+        $('#pairing-code-display').hide().text('');
+        $('#phone-instruction').hide();
+        $(this).prop('disabled', true).html('<i class="fas fa-spinner fa-spin"></i> Memproses...');
+        updateStatus(false, 'Meminta kode tautan...');
+
+        socket.emit('request_pairing_code', {
+          clientId: clientId,
+          phoneNumber: phoneInput
+        });
+      });
+
+      // Menerima Pairing Code dari Server
+      socket.on('pairing_code_result', function (payload) {
+        const code = typeof payload === 'string' ? payload : payload.code;
+        const phoneNumber = typeof payload === 'object' ? payload.phoneNumber : '';
+        const formattedCode = String(code || '').replace(/\s/g, '').match(/.{1,4}/g)?.join('-') || code;
+
+        $('#loaderqr').hide();
+        $('#auth-area').show();
+        $('#auth-methods').show();
+        $('#qr-section').hide();
+        $('#phone-section').show();
+
+        $('#btn-request-code').prop('disabled', false).text('Minta Kode Tautan');
+        $('#pairing-code-display').text(formattedCode).show();
+        $('#phone-instruction')
+          .text(`Buka WhatsApp di HP ${phoneNumber ? '+' + phoneNumber : ''} > Perangkat tertaut > Tautkan dengan nomor telepon, lalu masukkan kode di atas.`)
+          .show();
+
+        updateStatus(false, 'Kode tautan dibuat');
+      });
+
+      socket.on('pairing_code_error', function (message) {
+        $('#btn-request-code').prop('disabled', false).text('Minta Kode Tautan');
+        $('#loaderqr').hide();
+        $('#auth-area').show();
+        $('#auth-methods').show();
+        $('#phone-section').show();
+        $('#pairing-code-display').hide().text('');
+        $('#phone-instruction').hide();
+        updateStatus(false, 'Gagal membuat kode');
+        addLog(message);
+      });
+
+      // ------------------------------------
+
+      // Saat QR tersedia, tampilkan pilihan autentikasi: Scan QR atau Nomor HP.
+      socket.on('qr', function (src) {
+        $('#auth-area').show();
+        $('#auth-methods').show();
+        $('#loaderqr').hide();
+        $('#qrcode').attr('src', src).show();
+        $('#instruction-text').show();
+
+        // Default tetap QR, kecuali user sedang berada di tab Nomor HP.
+        if (!$('#phone-section').is(':visible')) {
+          $('#btn-tab-qr').removeClass('btn-outline-primary').addClass('btn-primary');
+          $('#btn-tab-phone').removeClass('btn-primary').addClass('btn-outline-primary');
+          $('#qr-section').show();
+          $('#phone-section').hide();
+        }
+
+        updateStatus(false, 'Menunggu autentikasi');
+        $('#btn-regenerate-qr').hide();
+        $('#qr-count-info').hide();
       });
 
       // Kirim Pesan dengan Enter

@@ -11,6 +11,24 @@ const path = require('path');
 const axios = require('axios');
 require('dotenv').config();
 
+process.on('unhandledRejection', (reason) => {
+    const msg = reason && reason.message ? reason.message : String(reason);
+    if (msg.includes('Evaluation failed') || msg.includes('onCodeReceivedEvent') || msg.includes('requestPairingCode')) {
+        console.warn('[PAIRING WARNING] Error pairing ditahan agar server tidak crash:', msg);
+        return;
+    }
+    console.error('[UNHANDLED REJECTION]', reason);
+});
+
+process.on('uncaughtException', (error) => {
+    const msg = error && error.message ? error.message : String(error);
+    if (msg.includes('Evaluation failed') || msg.includes('onCodeReceivedEvent') || msg.includes('requestPairingCode')) {
+        console.warn('[PAIRING WARNING] Exception pairing ditahan agar server tidak crash:', msg);
+        return;
+    }
+    console.error('[UNCAUGHT EXCEPTION]', error);
+});
+
 const port = process.env.PORT || 8897;
 const app = express();
 const server = http.createServer(app);
@@ -33,6 +51,117 @@ const QR_DEBOUNCE_TIME = 2000; // Debounce 2 detik untuk QR events
 const qrCounts = {}; // Hitungan jumlah QR yang sudah digenerate per klien
 const QR_LIMIT = 20; // Batas maksimal generate QR sebelum diblokir
 const wwebjsVersion = require('whatsapp-web.js/package.json').version;
+
+const AUTH_MAX_GENERATE = 10;
+const authFlow = {};
+
+// Helper login WhatsApp via nomor HP / pairing code.
+// Format yang dibutuhkan wwebjs: nomor internasional tanpa simbol, contoh 6281234567890.
+const normalizePairingPhoneNumber = (phoneNumber) => {
+    let cleanNumber = String(phoneNumber || '').replace(/\D/g, '');
+
+    // Shortcut Indonesia: 0812xxxx -> 62812xxxx, 812xxxx -> 62812xxxx
+    if (cleanNumber.startsWith('0')) cleanNumber = `62${cleanNumber.slice(1)}`;
+    if (cleanNumber.startsWith('8')) cleanNumber = `62${cleanNumber}`;
+
+    return cleanNumber;
+};
+
+const initAuthFlow = (clientId, mode = 'qr', phoneNumber = null) => {
+    authFlow[clientId] = {
+        mode,
+        count: 0,
+        paused: false,
+        lastPhoneNumber: phoneNumber,
+        updatedAt: Date.now()
+    };
+    return authFlow[clientId];
+};
+
+const deleteClientSession = (clientId) => {
+    const sessionPath = path.join(__dirname, 'sessions', `session-${clientId}`);
+    try {
+        if (fs.existsSync(sessionPath)) {
+            fs.rmSync(sessionPath, { recursive: true, force: true });
+            console.log(`[${clientId}] Session lama dihapus sebelum retry pairing/QR.`);
+        }
+    } catch (error) {
+        console.warn(`[${clientId}] Gagal menghapus session lama:`, error.message);
+    }
+};
+
+const destroyClientSafely = async (clientId) => {
+    if (clients[clientId]) {
+        try {
+            await clients[clientId].destroy();
+        } catch (e) {
+            console.warn(`[${clientId}] Gagal destroy client:`, e.message);
+        }
+        delete clients[clientId];
+    }
+};
+
+const pauseAuthFlow = async (clientId, mode) => {
+    const state = authFlow[clientId];
+    if (!state || state.paused) return;
+
+    state.paused = true;
+    state.updatedAt = Date.now();
+
+    io.to(clientId).emit('auth_limit_reached', {
+        clientId,
+        mode: mode || state.mode || 'qr',
+        count: state.count,
+        limit: AUTH_MAX_GENERATE,
+        phoneNumber: state.lastPhoneNumber || null
+    });
+
+    io.to(clientId).emit(
+        'message',
+        `Sudah ${AUTH_MAX_GENERATE}x update ${mode === 'pairing' ? 'pairing code' : 'QR code'}. Menunggu konfirmasi user untuk melanjutkan.`
+    );
+
+    // Stop generate berikutnya dengan menghentikan client saat ini.
+    await destroyClientSafely(clientId);
+};
+
+const markAuthGeneration = async (clientId, mode, phoneNumber = null) => {
+    const state = authFlow[clientId] || initAuthFlow(clientId, mode, phoneNumber);
+    state.mode = mode || state.mode || 'qr';
+    if (phoneNumber) state.lastPhoneNumber = phoneNumber;
+    state.count = (state.count || 0) + 1;
+    state.updatedAt = Date.now();
+
+    if (state.count >= AUTH_MAX_GENERATE) {
+        await pauseAuthFlow(clientId, state.mode);
+        return false;
+    }
+    return true;
+};
+
+const resumeAuthFlow = async (clientId) => {
+    const state = authFlow[clientId];
+    if (!state) throw new Error('State autentikasi belum ditemukan.');
+
+    state.paused = false;
+    state.count = 0;
+    state.updatedAt = Date.now();
+
+    // Hentikan client lama bila masih ada, lalu start ulang sesuai mode terakhir.
+    await destroyClientSafely(clientId);
+
+    if (state.mode === 'pairing') {
+        deleteClientSession(clientId);
+        if (!state.lastPhoneNumber) {
+            throw new Error('Nomor HP pairing terakhir tidak ditemukan.');
+        }
+        await initializeWhatsApp(clientId, { pairPhoneNumber: state.lastPhoneNumber });
+        return;
+    }
+
+    await initializeWhatsApp(clientId);
+};
+
 // --- Middleware & Setup ---
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
@@ -47,32 +176,38 @@ app.use(session({
     cookie: { maxAge: 24 * 60 * 60 * 1000 }
 }));
 
-const initializeWhatsApp = async (clientId) => {
+const initializeWhatsApp = async (clientId, options = {}) => {
+    const { pairPhoneNumber = null } = options;
+
     // Jika klien sudah diblokir karena terlalu banyak QR, jangan inisialisasi ulang sampai regenerate.
-    if (clientStates[clientId] && clientStates[clientId].status === 'qr_blocked') {
+    // Mode pairing nomor HP boleh melewati status qr_blocked karena client akan dibuat ulang.
+    if (!pairPhoneNumber && clientStates[clientId] && clientStates[clientId].status === 'qr_blocked') {
         console.log(`[${clientId}] Inisialisasi dibatalkan karena status qr_blocked.`);
         return;
     }
-    // 1. Cek apakah sudah ada instance yang sedang berjalan atau aktif
+
+    // Cek apakah sudah ada instance yang sedang berjalan atau aktif.
     if (clients[clientId] || clientInits[clientId]) {
         console.log(`[${clientId}] Inisialisasi sudah berjalan atau client aktif.`);
         return;
     }
-    clientInits[clientId] = true; // Tandai sedang proses inisialisasi
-    console.log(`Menginisialisasi WhatsApp untuk ${clientId}...`);
-    // Reset counter QR untuk klien ini saat mulai inisialisasi
+
+    clientInits[clientId] = true;
+    console.log(`Menginisialisasi WhatsApp untuk ${clientId}${pairPhoneNumber ? ' dengan pairing nomor HP' : ''}...`);
+
     qrCounts[clientId] = qrCounts[clientId] || 0;
-    // clientStates[clientId] = { status: 'loading', data: null };
-    io.to(clientId).emit('loading_screen'); // Kirim status loading ke frontend
-    
-    const client = new Client({
+    initAuthFlow(clientId, pairPhoneNumber ? 'pairing' : 'qr', pairPhoneNumber);
+    clientStates[clientId] = { status: 'loading', data: null };
+    io.to(clientId).emit(pairPhoneNumber ? 'loading_screen_pairing' : 'loading_screen');
+
+    const clientOptions = {
         restartOnAuthFail: false,
-        puppeteer: { 
-            headless: true, 
+        puppeteer: {
+            headless: true,
             args: [
-                '--no-sandbox', 
-                '--disable-setuid-sandbox', 
-                '--disable-dev-shm-usage', 
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--disable-dev-shm-usage',
                 '--disable-accelerated-2d-canvas',
                 '--no-first-run',
                 '--disable-gpu',
@@ -81,178 +216,192 @@ const initializeWhatsApp = async (clientId) => {
                 '--proxy-server="direct://"',
                 '--proxy-bypass-list=*',
                 '--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            
-            	'--disable-extensions',       // Mencegah load ekstensi default
-    '--disable-default-apps',
-    '--mute-audio',               // Mematikan engine audio
-    '--no-default-browser-check',
-    '--autoplay-policy=user-gesture-required',
-    '--disable-background-timer-throttling',
-    '--disable-backgrounding-occluded-windows',
-    '--disable-renderer-backgrounding',
-    // Opsi untuk mencegah cache disk membengkak:
-    '--disk-cache-size=0',
+                '--disable-extensions',
+                '--disable-default-apps',
+                '--mute-audio',
+                '--no-default-browser-check',
+                '--autoplay-policy=user-gesture-required',
+                '--disable-background-timer-throttling',
+                '--disable-backgrounding-occluded-windows',
+                '--disable-renderer-backgrounding',
+                '--disk-cache-size=0',
             ]
         },
-        authStrategy: new LocalAuth({ 
-            clientId: clientId, 
-            dataPath: './sessions' 
+        authStrategy: new LocalAuth({
+            clientId: clientId,
+            dataPath: './sessions'
         }),
         webVersionCache: {
             type: 'remote',
-            remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/refs/heads/main/html/2.3000.1031490220-alpha.html`,    
+            remotePath: `https://raw.githubusercontent.com/wppconnect-team/wa-version/refs/heads/main/html/2.3000.1031490220-alpha.html`,
         },
-    });
-    
+    };
+
+    // Mode login nomor HP. Ini lebih stabil daripada memanggil requestPairingCode()
+    // secara manual pada client QR yang sudah berjalan.
+    if (pairPhoneNumber) {
+        clientOptions.pairWithPhoneNumber = {
+            phoneNumber: pairPhoneNumber,
+            showNotification: true,
+            intervalMs: 180000
+        };
+    }
+
+    const client = new Client(clientOptions);
     clients[clientId] = client;
-    
+
+    const cleanupAuthCaches = () => {
+        if (qrCache[clientId]) {
+            qrCache[clientId].imageUrl = null;
+            delete qrCache[clientId];
+        }
+        if (qrCounts[clientId]) delete qrCounts[clientId];
+    };
+
     const handleQrEvent = async (qr) => {
+        // Jika client sedang dibuat untuk pairing code, abaikan QR agar UI tidak bentrok.
+        if (pairPhoneNumber) return;
+
         clientInits[clientId] = false;
-        
-        // Jika sudah dalam status blokir, abaikan QR event selanjutnya.
+
         if (clientStates[clientId] && clientStates[clientId].status === 'qr_blocked') {
             return;
         }
-        
-        // Cek apakah QR code sudah ada di cache atau masih dalam debounce time
+
         const now = Date.now();
         if (qrCache[clientId]) {
             const { qrString, timestamp, imageUrl } = qrCache[clientId];
-            
-            // Jika QR string sama dan belum melewati debounce time, skip
+
             if (qrString === qr && (now - timestamp) < QR_DEBOUNCE_TIME) {
                 return;
             }
-            
-            // Cleanup QR lama dari memory jika ada
+
             if (imageUrl) {
                 qrCache[clientId].imageUrl = null;
             }
         }
-        
+
         try {
-            // Hitung berapa kali QR sudah digenerate (hanya saat kita akan mengemit ke UI)
             qrCounts[clientId] = (qrCounts[clientId] || 0) + 1;
-            // Jika sudah melewati batas, jangan generate lagi dan beri tahu frontend
-            if (qrCounts[clientId] > QR_LIMIT) {
-                clientStates[clientId] = { status: 'qr_blocked', data: null, count: qrCounts[clientId] };
-                io.to(clientId).emit('qr_limit_reached', { count: qrCounts[clientId], limit: QR_LIMIT });
-                io.to(clientId).emit('message', `QR generation diblokir setelah ${QR_LIMIT} percobaan. Tekan regenerate untuk mencoba lagi.`);
-                console.log(`[${clientId}] QR generation diblokir setelah ${qrCounts[clientId]} percobaan.`);
-                clientInits[clientId] = false;
-                try {
-                    await client.destroy();
-                } catch (e) {
-                    console.warn(`[${clientId}] Gagal menghentikan client setelah block:`, e.message);
-                }
-                delete clients[clientId];
-                return;
-            }
 
             console.log(`[${clientId}] QR Code diterima.`);
             const qrImage = await qrcode.toDataURL(qr);
             clientStates[clientId] = { status: 'qr', data: qrImage, count: qrCounts[clientId] };
-            
-            // Cache QR code baru
+
             qrCache[clientId] = {
                 qrString: qr,
                 timestamp: now,
                 imageUrl: qrImage
             };
-            
+
             io.to(clientId).emit('qr', qrImage);
-            io.to(clientId).emit('message', 'Silakan pindai QR Code.');
+            io.to(clientId).emit('message', 'Silakan pindai QRCode atau pilih login menggunakan Nomor HP.');
+
+            await markAuthGeneration(clientId, 'qr');
+
         } catch (err) {
             console.error(`[${clientId}] Error generating QR code:`, err);
+            io.to(clientId).emit('message', `Gagal membuat QR: ${err.message}`);
         }
     };
 
     client.on('qr', handleQrEvent);
-    
+
+    // Event ini keluar otomatis dari wwebjs saat options.pairWithPhoneNumber dipakai.
+    client.on('code', async (code) => {
+        const formattedCode = String(code || '').replace(/\s/g, '').match(/.{1,4}/g)?.join('-') || code;
+        console.log(`[${clientId}] Pairing Code diterima: ${formattedCode}`);
+
+        clientInits[clientId] = false;
+        clientStates[clientId] = {
+            status: 'pairing_code',
+            data: code,
+            phoneNumber: pairPhoneNumber,
+            createdAt: Date.now()
+        };
+
+        io.to(clientId).emit('pairing_code_result', { code, phoneNumber: pairPhoneNumber });
+        io.to(clientId).emit('message', 'Pairing code berhasil dibuat. Buka WhatsApp di HP lalu masukkan kode tautan perangkat.');
+
+        await markAuthGeneration(clientId, 'pairing', pairPhoneNumber);
+    });
+
     client.on('ready', () => {
         console.log(`[${clientId}] SIAP!`);
         clientInits[clientId] = false;
         clientStates[clientId] = { status: 'ready', data: null };
-        
-        // Cleanup QR cache saat login berhasil
-        if (qrCache[clientId]) {
-            qrCache[clientId].imageUrl = null;
-            delete qrCache[clientId];
-        }
-        // Reset counter QR
-        if (qrCounts[clientId]) delete qrCounts[clientId];
-        
+
+        cleanupAuthCaches();
+
         io.to(clientId).emit('ready');
         io.to(clientId).emit('message', `[${clientId}] Terhubung.`);
     });
-    
+
     client.on('message', async (msg) => {
-        // Kirim data pesan baru ke frontend agar daftar chat bisa update otomatis
-        const chat = await msg.getChat();
-        const contact = await msg.getContact();
-        const profilePic = await contact.getProfilePicUrl().catch(() => '');
-        
-        io.to(clientId).emit('new_message', {
-            from: msg.from,
-            body: msg.body,
-            name: chat.name,
-            timestamp: msg.timestamp,
-            profilePic: profilePic,
-            unreadCount: chat.unreadCount
-        });
+        try {
+            const chat = await msg.getChat();
+            const contact = await msg.getContact();
+            const profilePic = await contact.getProfilePicUrl().catch(() => '');
+
+            io.to(clientId).emit('new_message', {
+                from: msg.from,
+                body: msg.body,
+                name: chat.name,
+                timestamp: msg.timestamp,
+                profilePic: profilePic,
+                unreadCount: chat.unreadCount
+            });
+        } catch (error) {
+            console.error(`[${clientId}] Gagal memproses pesan masuk:`, error.message);
+        }
     });
-    
+
     client.on('authenticated', () => {
         clientStates[clientId] = { status: 'authenticated', data: null };
         io.to(clientId).emit('authenticated');
     });
-    
-    client.on('auth_failure', () => {
+
+    client.on('auth_failure', (message) => {
+        clientInits[clientId] = false;
         clientStates[clientId] = { status: 'auth_failure', data: null };
-        io.to(clientId).emit('message', `[${clientId}] Autentikasi gagal.`);
+        io.to(clientId).emit('message', `[${clientId}] Autentikasi gagal${message ? `: ${message}` : '.'}`);
     });
-    
+
     client.on('disconnected', async (reason) => {
         console.log(`[${clientId}] Terputus: ${reason}`);
         io.to(clientId).emit('message', `[${clientId}] terputus, ${reason}.`);
         clientStates[clientId] = { status: 'disconnected', data: null };
         clientInits[clientId] = false;
-        
-        // Cleanup QR cache
-        if (qrCache[clientId]) {
-            qrCache[clientId].imageUrl = null;
-            delete qrCache[clientId];
-        }
-        // Cleanup QR counter
-        if (qrCounts[clientId]) delete qrCounts[clientId];
-        
-        io.to(clientId).emit('message', `[${clientId}] Terputus. Halaman akan memuat ulang dalam 5 detik.`);
-        
+
+        cleanupAuthCaches();
+
         try {
-            await client.destroy(); // Pastikan proses chrome tertutup sempurna
+            await client.destroy();
         } catch (e) {}
-        
+
         delete clients[clientId];
+
         if (reason === 'LOGOUT') {
-            // const fs = require('fs');
-            const sessionPath = `./sessions/session-${clientId}`; // Sesuaikan dengan struktur LocalAuth
+            const sessionPath = `./sessions/session-${clientId}`;
             if (fs.existsSync(sessionPath)) {
                 fs.rmSync(sessionPath, { recursive: true, force: true });
                 console.log(`[${clientId}] Folder session dihapus karena logout.`);
             }
         }
+
         io.to(clientId).emit('message', 'WhatsApp Terputus.');
     });
-    
+
     client.initialize().catch(err => {
         clientInits[clientId] = false;
         delete clients[clientId];
+        clientStates[clientId] = { status: 'init_failed', data: null };
         console.error(`[${clientId}] Gagal:`, err);
+        io.to(clientId).emit('pairing_code_error', `Gagal inisialisasi WhatsApp: ${err.message || err}`);
+        io.to(clientId).emit('message', `Gagal inisialisasi WhatsApp: ${err.message || err}`);
     });
-    
-    // Simpan instance klien setelah dibuat
-    clients[clientId] = client;
 };
+
 
 // Inisialisasi semua klien yang terdaftar di .env
 // CLIENT_IDS.forEach(id => initializeWhatsApp(id));
@@ -274,6 +423,7 @@ io.on('connection', (socket) => {
                 if (currentState) {
                     // Kirim status terakhir agar UI sinkron tanpa refresh
                     if (currentState.status === 'qr') socket.emit('qr', currentState.data);
+                    if (currentState.status === 'pairing_code') socket.emit('pairing_code_result', { code: currentState.data, phoneNumber: currentState.phoneNumber });
                     if (currentState.status === 'qr_blocked') socket.emit('qr_limit_reached', { count: currentState.count || 0, limit: QR_LIMIT });
                     if (currentState.status === 'ready') socket.emit('ready');
                 }
@@ -304,6 +454,75 @@ io.on('connection', (socket) => {
             initializeWhatsApp(clientId);
         } catch (e) {
             socket.emit('message', `Gagal meregenerasi QR: ${e.message}`);
+        }
+    });
+
+    // --- TAMBAHAN: Event untuk login WA memakai nomor HP / pairing code ---
+    socket.on('request_pairing_code', async (data = {}) => {
+        const { clientId, phoneNumber } = data;
+
+        if (!CLIENT_IDS.includes(clientId)) {
+            socket.emit('pairing_code_error', 'Klien tidak ditemukan.');
+            return socket.emit('message', 'Klien tidak ditemukan.');
+        }
+
+        const cleanNumber = normalizePairingPhoneNumber(phoneNumber);
+
+        if (!/^62\d{8,15}$/.test(cleanNumber)) {
+            socket.emit('pairing_code_error', 'Format nomor tidak valid. Contoh: 6281234567890 atau 081234567890.');
+            return socket.emit('message', 'Format nomor tidak valid.');
+        }
+
+        try {
+            socket.join(clientId);
+            socket.emit('message', `Memulai login nomor HP untuk ${cleanNumber}...`);
+
+            // Hentikan client QR yang sedang berjalan supaya tidak bentrok dengan mode pairing code.
+            await destroyClientSafely(clientId);
+
+            clientInits[clientId] = false;
+            qrCounts[clientId] = 0;
+
+            if (qrCache[clientId]) {
+                qrCache[clientId].imageUrl = null;
+                delete qrCache[clientId];
+            }
+
+            initAuthFlow(clientId, 'pairing', cleanNumber);
+            clientStates[clientId] = { status: 'loading', data: null };
+            io.to(clientId).emit('loading_screen_pairing');
+
+            await initializeWhatsApp(clientId, {
+                pairPhoneNumber: cleanNumber
+            });
+        } catch (error) {
+            console.error(`[${clientId}] Gagal mulai pairing code:`, error);
+            socket.emit('pairing_code_error', `Gagal mendapatkan pairing code: ${error.message}`);
+            socket.emit('message', `Gagal mendapatkan pairing code: ${error.message}`);
+        }
+    });
+
+    socket.on('auth_retry', async (data = {}) => {
+        const { clientId } = data;
+        if (!CLIENT_IDS.includes(clientId)) {
+            return socket.emit('message', 'Klien tidak ditemukan.');
+        }
+
+        const state = authFlow[clientId];
+        if (!state) {
+            return socket.emit('message', 'State autentikasi belum tersedia.');
+        }
+
+        try {
+            socket.emit('message', `Melanjutkan login mode ${state.mode}...`);
+            state.paused = false;
+            state.count = 0;
+
+            await resumeAuthFlow(clientId);
+        } catch (error) {
+            console.error(`[${clientId}] Gagal retry autentikasi:`, error);
+            socket.emit('pairing_code_error', `Gagal melanjutkan autentikasi: ${error.message}`);
+            socket.emit('message', `Gagal melanjutkan autentikasi: ${error.message}`);
         }
     });
 
